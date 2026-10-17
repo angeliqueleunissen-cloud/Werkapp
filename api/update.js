@@ -36,24 +36,21 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Ongeldige status.' });
     }
 
-    // Huidige gegevens uit Excel ophalen
+    // Huidige Excelgegevens ophalen
     const used = await getWorkbookUsedRange();
     const values = used.values || [];
 
-    // Bepalen vanaf welke Excel-rij het gebruikte bereik begint
     const address = String(used.address || 'A1');
     const match =
       address.match(/![A-Z]+(\d+)/i) ||
       address.match(/^[A-Z]+(\d+)/i);
 
     const startRow = match ? Number(match[1]) : 1;
-
-    // Rij in het gebruikte bereik bepalen
     const arrayIndex = n - startRow;
 
     if (arrayIndex < 0 || arrayIndex >= values.length) {
       return res.status(400).json({
-        error: 'De opgegeven Excel-rij bestaat niet in het gebruikte bereik.'
+        error: 'De opgegeven Excel-rij bestaat niet.'
       });
     }
 
@@ -62,10 +59,46 @@ export default async function handler(req, res) {
     // M = Status
     const oldStatus = String(currentRow[12] ?? '').trim();
 
+    // N = Type
+    const type = String(currentRow[13] ?? '').trim();
+
     // W = Opmerkingen
     const oldNote = String(currentRow[22] ?? '').trim();
 
-    // Nederlandse datum/tijd
+    /*
+     * BELANGRIJKE REGEL:
+     *
+     * Als Blazen TB = Nee heeft gekozen,
+     * staat er "TB niet gemaakt" in Opmerkingen.
+     *
+     * Zodra Civiel daarna gereed meldt,
+     * moet de opdracht naar LASSEN.
+     *
+     * Dit wordt hier in de backend afgedwongen.
+     */
+    let finalStatus = String(status);
+    let finalNote = String(note ?? '').trim();
+
+    if (
+      oldStatus === 'Civiel' &&
+      finalStatus === 'Blazen' &&
+      oldNote.toLowerCase().includes('tb niet gemaakt')
+    ) {
+      finalStatus = 'Lassen';
+      finalNote = 'Civiel gereed - Blazen was al gereed, TB niet gemaakt - naar Lassen';
+    }
+
+    // Extra beveiliging:
+    // DAC mag nooit naar Blazen.
+    if (
+      finalStatus === 'Blazen' &&
+      type.toUpperCase() === 'DAC'
+    ) {
+      finalStatus = 'Lassen';
+      finalNote = 'DAC - automatisch naar Lassen';
+    }
+
+    // Datum/tijd Nederland
     const timestamp = new Intl.DateTimeFormat('nl-NL', {
       timeZone: 'Europe/Amsterdam',
       day: '2-digit',
@@ -76,31 +109,29 @@ export default async function handler(req, res) {
       hour12: false
     }).format(new Date());
 
-    // Melding maken
-    let logText = String(note ?? '').trim();
-
-    if (!logText) {
-      logText = `Status gewijzigd: ${oldStatus || '-'} → ${String(status)}`;
+    if (!finalNote) {
+      finalNote =
+        `Status gewijzigd: ${oldStatus || '-'} → ${finalStatus}`;
     }
 
-    const logEntry = `${timestamp} - ${logText}`;
+    const logEntry = `${timestamp} - ${finalNote}`;
 
-    // Bestaande opmerkingen behouden en nieuwe melding eronder zetten
+    // Bestaande opmerkingen behouden
     const newNote = oldNote
       ? `${oldNote}\n${logEntry}`
       : logEntry;
 
-    // Eerst status wijzigen
-    await setCell(n, 'M', String(status));
+    // Status opslaan
+    await setCell(n, 'M', finalStatus);
 
-    // Daarna de statuswijziging toevoegen aan Opmerkingen
+    // Opmerking toevoegen
     await setCell(n, 'W', newNote);
 
     return res.status(200).json({
       ok: true,
       row: n,
       oldStatus,
-      status: String(status),
+      status: finalStatus,
       logged: logEntry
     });
 
