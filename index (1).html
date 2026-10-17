@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b6b3a">
+<link rel="manifest" href="manifest.json">
+<title>MRM-01 Werkapp</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f3f5f7;color:#17202a}
+header{background:#0b6b3a;color:#fff;padding:18px 16px;position:sticky;top:0;z-index:5}
+h1{font-size:21px;margin:0 0 5px}.sub{opacity:.9;font-size:13px}
+main{max-width:760px;margin:auto;padding:14px}
+.card{background:#fff;border-radius:16px;padding:15px;margin:10px 0;box-shadow:0 2px 10px #0001}
+button,select{width:100%;border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:700}
+button{background:#0b6b3a;color:#fff;margin-top:9px}.secondary{background:#e8edf0;color:#17202a}
+.workerGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.workerGrid button{margin:0}
+.task{border-left:7px solid #777}.address{font-size:18px;font-weight:800}.meta{margin-top:6px;color:#58636e;font-size:14px}
+.badge{display:inline-block;border-radius:20px;padding:5px 9px;font-size:12px;font-weight:800;background:#e9eef2;margin-top:8px}
+.details{display:none;margin-top:12px;border-top:1px solid #ddd;padding-top:10px}
+.row{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #eee}.k{width:42%;font-weight:700;color:#52606d}.v{width:58%;word-break:break-word}
+.actions{margin-top:10px}.small{font-size:12px;color:#6b747c}.filterBox{margin-top:10px;padding-top:10px;border-top:1px solid #eee}.filterBox label{display:block;font-size:13px;font-weight:700;margin-bottom:6px;color:#52606d}.hidden{display:none!important}
+.warn{background:#fff4cf;border:1px solid #e6c65a;padding:12px;border-radius:12px;margin:10px 0}
+#toast{position:fixed;left:12px;right:12px;bottom:15px;background:#17202a;color:#fff;padding:13px;border-radius:12px;display:none;z-index:20}.tbPanel{position:fixed;left:12px;right:12px;bottom:15px;background:#fff;border-radius:16px;padding:18px;box-shadow:0 4px 25px #0003;z-index:30;border:1px solid #ddd}.tbPanel h3{margin:0 0 8px}.tbPanel p{margin:0 0 10px;color:#58636e}.tbYes{background:#198754}.tbNo{background:#dc3545}
+@media(min-width:600px){.workerGrid{grid-template-columns:repeat(5,1fr)}}
+</style>
+</head>
+<body>
+<header><h1>MRM-01 Werkapp</h1><div class="sub" id="workerLabel">Kies je naam</div></header>
+<main>
+<section id="login">
+  <div class="card">
+    <h2>Wie ben je?</h2>
+    <p class="small">Je hoeft niet in te loggen met Microsoft.</p>
+    <div class="workerGrid">
+      <button onclick="chooseWorker('Civiel')">Civiel</button>
+      <button onclick="chooseWorker('Blazen')">Blazen</button>
+      <button onclick="chooseWorker('Lasser')">Lasser</button>
+      <button onclick="chooseWorker('Hasser')">Hasser</button>
+      <button onclick="chooseWorker('Schouw')">Schouw</button>
+    </div>
+  </div>
+</section>
+
+<section id="app" class="hidden">
+  <div class="card">
+    <div><b id="count">0</b> openstaande werkzaamheden</div>
+    <button class="secondary" onclick="loadTasks()">Verversen</button>
+    <button class="secondary" onclick="changeWorker()">Andere medewerker</button>
+    <div id="blazenFilter" class="filterBox hidden">
+      <label for="dpFilter">Kies project / DP (kolom A)</label>
+      <select id="dpFilter" onchange="applyDpFilter()">
+        <option value="">Alle projecten</option>
+      </select>
+    </div>
+  </div>
+  <div id="tasks"></div>
+</section>
+</main>
+<div id="tbPanel" class="tbPanel hidden">
+  <h3>TB gemaakt?</h3>
+  <p>Kies wat van toepassing is.</p>
+  <button class="tbYes" onclick="tbKeuze(true)">Ja, TB gemaakt</button>
+  <button class="tbNo" onclick="tbKeuze(false)">Nee, TB niet gemaakt</button>
+</div>
+<div id="toast"></div>
+
+<script>
+const CONFIG = {
+  apiBase: "/api",
+  sheet: "MRM-01",
+  workers: {
+    Civiel: "Civiel",
+    Blazen: "Blazen",
+    Lasser: "Lassen",
+    Hasser: "Hassen",
+    Schouw: "Schouw"
+  }
+};
+
+let worker = null, tasks = [], dpFilter = "", tbTaskIndex = null;
+
+function changeWorker(){
+  localStorage.removeItem("mrmWorker");
+  worker=null;
+  tasks=[];
+  dpFilter="";
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("login").classList.remove("hidden");
+  document.getElementById("workerLabel").textContent="Kies je naam";
+}
+
+function chooseWorker(name){
+  worker = name;
+  localStorage.setItem("mrmWorker", name);
+  document.getElementById("login").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  document.getElementById("workerLabel").textContent = name + " — " + CONFIG.workers[name];
+  dpFilter="";
+  loadTasks();
+}
+
+async function loadTasks(){
+  const box = document.getElementById("tasks");
+  box.innerHTML = '<div class="card">Werkzaamheden laden...</div>';
+  try{
+    if(!CONFIG.apiBase || CONFIG.apiBase.startsWith("VUL_HIER")){
+      throw new Error("BACKEND_NIET_INGEVULD");
+    }
+    const r = await fetch(CONFIG.apiBase + "/list?worker=" + encodeURIComponent(worker) + "&sheet=" + encodeURIComponent(CONFIG.sheet));
+    if(!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    tasks = data.rows || [];
+    setupDpFilter();
+    render();
+  }catch(e){
+    box.innerHTML = `<div class="warn"><b>Werkzaamheden konden niet worden geladen.</b><br>
+    Controleer de OneDrive/Excel-koppeling op Vercel.
+    <br><br><small>${esc(e.message || "Onbekende fout")}</small></div>`;
+    document.getElementById("count").textContent = "0";
+  }
+}
+
+function setupDpFilter(){
+  const wrap=document.getElementById("blazenFilter");
+  const select=document.getElementById("dpFilter");
+  if(!["Civiel","Blazen","Lasser","Hasser","Schouw"].includes(worker)){
+    wrap.classList.add("hidden");
+    return;
+  }
+  wrap.classList.remove("hidden");
+  const values=[...new Set(tasks.map(t=>String(t["DP"]??"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"}));
+  select.innerHTML='<option value="">Alle projecten</option>'+values.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  select.value=dpFilter;
+}
+
+function applyDpFilter(){
+  dpFilter=document.getElementById("dpFilter").value;
+  render();
+}
+
+function render(){
+  const visibleTasks = dpFilter
+    ? tasks.filter(t=>String(t["DP"]??"").trim()===dpFilter)
+    : tasks;
+  document.getElementById("count").textContent = visibleTasks.length;
+  const box = document.getElementById("tasks");
+  if(!visibleTasks.length){box.innerHTML='<div class="card">Geen openstaande werkzaamheden voor deze keuze.</div>';return;}
+  box.innerHTML = visibleTasks.map(t=>{
+    const originalIndex=tasks.indexOf(t);
+    return card(t,originalIndex);
+  }).join("");
+}
+
+function card(t,i){
+  const address = t["Volledig Adres"] || [t["Plaats"],t["Huisnummer"],t["Toevoeging"]].filter(Boolean).join(" ");
+  const type = t["Type"] || t["Type kabel"] || "";
+  const status = t["Status"] || "";
+  return `<div class="card task">
+    <div class="address">📍 ${esc(address || "Adres onbekend")}</div>
+    <div class="meta">${esc(t["Plaats"]||"")} ${type ? "• "+esc(type):""}</div>
+    <span class="badge">${esc(status)}</span>
+    <button class="secondary" onclick="toggleDetails(${i})">Bekijk alle gegevens</button>
+    <div class="details" id="details-${i}">
+      ${Object.entries(t).filter(([k])=>k!=="_row").map(([k,v])=>
+        `<div class="row"><div class="k">${esc(k)}</div><div class="v">${esc(v ?? "")}</div></div>`).join("")}
+    </div>
+    <div class="actions">
+      ${worker==="Blazen" ? `<button onclick="blazenGereed(${i})">Blazen gereed</button>` :
+        `<button onclick="gereed(${i})">${buttonText()}</button>`}
+    </div>
+  </div>`;
+}
+
+function buttonText(){
+  return {Civiel:"Civiel gereed",Lasser:"Lassen gereed",Hasser:"Hassen gereed",Schouw:"Schouw gereed"}[worker] || "Gereed";
+}
+function toggleDetails(i){
+  const el=document.getElementById("details-"+i);
+  el.style.display=el.style.display==="block"?"none":"block";
+}
+async function gereed(i){
+  const t=tasks[i];
+  let next;
+
+  if(worker==="Civiel"){
+    // Als Blazen eerder TB = Nee heeft gemeld, is Blazen al gereed.
+    // Civiel hoeft dan niet opnieuw naar Blazen, maar gaat door naar Lassen.
+    const opmerkingen = String(t["Opmerkingen"] ?? "").toLowerCase();
+
+    if(opmerkingen.includes("blazengereed - tb niet gemaakt")){
+      next = "Lassen";
+    }else{
+      // Normale Civiel-route: kijk naar Type.
+      const type = String(t["Type"] || t["Type kabel"] || "").trim();
+
+      if(type.toLowerCase()==="lege buis"){
+        next = "Blazen";
+      }else if(type.toUpperCase()==="DAC"){
+        next = "Hassen";
+      }else{
+        alert("Onbekend Type: "+type+"\nDe status wordt niet gewijzigd.");
+        return;
+      }
+    }
+  }else if(worker==="Lasser"){
+    next = "Hassen";
+  }else if(worker==="Hasser"){
+    next = "Gereed";
+  }else if(worker==="Schouw"){
+    next = "Civiel";
+  }else{
+    next = "Gereed";
+  }
+
+  await updateRow(t, next, `${worker} gereed - naar ${next}`);
+}
+function blazenGereed(i){
+  tbTaskIndex = i;
+  document.getElementById("tbPanel").classList.remove("hidden");
+}
+
+async function tbKeuze(tb){
+  const panel=document.getElementById("tbPanel");
+  panel.classList.add("hidden");
+  if(tbTaskIndex===null) return;
+  const t=tasks[tbTaskIndex];
+  tbTaskIndex=null;
+  const type = String(t["Type"] || t["Type kabel"] || "").trim();
+  let next, note;
+  if(!tb){
+    next="Civiel";
+    note="Blazengereed - TB niet gemaakt - terug naar Civiel";
+  }else if(type.toLowerCase()==="lege buis"){
+    next="Lassen";
+    note="Blazengereed - TB gemaakt - Type Lege buis - naar Lassen";
+  }else if(type.toUpperCase()==="DAC"){
+    next="Hassen";
+    note="Blazengereed - TB gemaakt - Type DAC - naar Hassen";
+  }else{
+    alert("Onbekend Type: "+type+"\nDe status wordt niet gewijzigd.");
+    return;
+  }
+  await updateRow(t,next,note);
+}
+async function updateRow(t,next,note){
+  if(!CONFIG.apiBase || CONFIG.apiBase.startsWith("VUL_HIER")){
+    alert("Backend nog niet gekoppeld.");
+    return;
+  }
+  try{
+    const r=await fetch(CONFIG.apiBase + "/update",{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({action:"update",sheet:CONFIG.sheet,row:t._row,status:next,note:note})
+    });
+    const d=await r.json();
+    if(!r.ok || d.ok===false) throw new Error(d.error||"Opslaan mislukt");
+    toast("Opgeslagen: "+next);
+    await loadTasks();
+  }catch(e){alert("Opslaan mislukt: "+e.message);}
+}
+function esc(v){
+  return String(v).replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+function toast(s){const x=document.getElementById("toast");x.textContent=s;x.style.display="block";setTimeout(()=>x.style.display="none",1800);}
+const saved=localStorage.getItem("mrmWorker");
+if(saved && CONFIG.workers[saved]) chooseWorker(saved);
+</script>
+</body>
+</html>
